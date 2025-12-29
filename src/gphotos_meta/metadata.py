@@ -332,7 +332,8 @@ class MetadataProcessor:
         self,
         media_path: Path,
         json_path: Path,
-        verify: bool = True
+        verify: bool = True,
+        video_path: Path | None = None
     ) -> tuple[bool, str, VerificationResult | None]:
         """Process a single media file with its JSON metadata.
         
@@ -340,6 +341,7 @@ class MetadataProcessor:
             media_path: Path to the media file
             json_path: Path to the JSON metadata file
             verify: Whether to verify the metadata after writing
+            video_path: Optional path to Live Photo video file (MP4) to also process
             
         Returns:
             Tuple of (success, message, verification_result)
@@ -352,15 +354,56 @@ class MetadataProcessor:
         if metadata is None:
             return False, f"Failed to parse JSON: {json_path}", None
         
-        # Write metadata
+        # Write metadata to main media file
         success, message = write_metadata_to_file(media_path, metadata, self._et)
         if not success:
             return False, message, None
         
+        # If this is a Live Photo, also write metadata to the video file
+        if video_path:
+            video_success, video_message = write_metadata_to_file(video_path, metadata, self._et)
+            if not video_success:
+                return False, f"Image: {message}; Video: {video_message}", None
+            message = f"{message}; Video: {video_message}"
+        
         # Verify if requested
         verification = None
         if verify:
+            # Verify main media file
             verification = verify_metadata(media_path, metadata, self._et)
+            
+            # If this is a Live Photo, also verify the video file
+            if video_path:
+                video_verification = verify_metadata(video_path, metadata, self._et)
+                # Combine verification results - both must succeed
+                img_date_ok = verification.date_match
+                img_gps_ok = verification.gps_match
+                img_desc_ok = verification.description_match
+                
+                verification.success = verification.success and video_verification.success
+                verification.date_match = verification.date_match and video_verification.date_match
+                verification.gps_match = verification.gps_match and video_verification.gps_match
+                verification.description_match = verification.description_match and video_verification.description_match
+                
+                # Combine messages
+                if not verification.success:
+                    issues = []
+                    if not img_date_ok:
+                        issues.append("image date")
+                    if not img_gps_ok:
+                        issues.append("image GPS")
+                    if not img_desc_ok:
+                        issues.append("image description")
+                    if not video_verification.date_match:
+                        issues.append("video date")
+                    if not video_verification.gps_match:
+                        issues.append("video GPS")
+                    if not video_verification.description_match:
+                        issues.append("video description")
+                    verification.message = f"Verification failed on: {', '.join(issues)}"
+                else:
+                    verification.message = "All metadata verified (image and video)"
+            
             if not verification.success:
                 return False, f"Verification failed: {verification.message}", verification
         

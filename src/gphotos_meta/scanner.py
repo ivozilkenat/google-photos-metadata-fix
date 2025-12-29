@@ -32,9 +32,12 @@ class MediaFilePair:
     """A media file paired with its JSON metadata file."""
     media_path: Path
     json_path: Path
+    video_path: Path | None = None  # For Live Photos: MP4 video file
     
     @property
     def media_name(self) -> str:
+        if self.video_path:
+            return f"{self.media_path.name} (+ {self.video_path.name})"
         return self.media_path.name
     
     @property
@@ -100,6 +103,40 @@ def is_media_file(filename: str) -> bool:
     return ext in MEDIA_EXTENSIONS
 
 
+def is_live_photo_image(filename: str) -> bool:
+    """Check if a filename is a Live Photo image (HEIC/HEIF)."""
+    ext = Path(filename).suffix.lower()
+    return ext in (".heic", ".heif")
+
+
+def find_live_photo_video(image_path: Path) -> Path | None:
+    """Find the corresponding MP4 video file for a Live Photo image.
+    
+    Args:
+        image_path: Path to the image file (e.g., image.HEIC)
+        
+    Returns:
+        Path to the MP4 file if found, None otherwise
+    """
+    if not is_live_photo_image(image_path.name):
+        return None
+    
+    # Get the base name without extension
+    base_name = image_path.stem
+    directory = image_path.parent
+    
+    # Try both .mp4 and .MP4 (case-insensitive check)
+    mp4_path = directory / f"{base_name}.mp4"
+    if mp4_path.exists():
+        return mp4_path
+    
+    mp4_path_upper = directory / f"{base_name}.MP4"
+    if mp4_path_upper.exists():
+        return mp4_path_upper
+    
+    return None
+
+
 def scan_directory(directory: Path, recursive: bool = False) -> ScanResult:
     """Scan a directory for media files and their metadata JSON files.
     
@@ -159,8 +196,13 @@ def scan_directory(directory: Path, recursive: bool = False) -> ScanResult:
     
     for media_path, json_path in json_files.items():
         if media_path in media_files:
-            result.pairs.append(MediaFilePair(media_path, json_path))
+            # Check if this is a Live Photo image with a corresponding MP4
+            video_path = find_live_photo_video(media_path)
+            result.pairs.append(MediaFilePair(media_path, json_path, video_path))
             matched_media.add(media_path)
+            # Also mark the MP4 as matched if it exists
+            if video_path and video_path in media_files:
+                matched_media.add(video_path)
         else:
             # JSON exists but media file doesn't
             result.orphan_jsons.append(json_path)

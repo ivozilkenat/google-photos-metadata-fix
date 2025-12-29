@@ -25,11 +25,18 @@ Examples:
   # Preview what will be processed (dry-run)
   gphotos-meta attach /path/to/takeout --recursive --dry-run
   
-  # Attach metadata to all files recursively
+  # Attach metadata to all files recursively (JSON files are preserved)
   gphotos-meta attach /path/to/takeout --recursive
   
-  # Delete JSON files after verifying metadata was written
+  # Re-run attach if needed (safe to run multiple times)
+  gphotos-meta attach /path/to/takeout --recursive
+  
+  # Delete JSON files ONLY after verifying metadata was written
   gphotos-meta cleanup /path/to/takeout --recursive
+
+Note:
+  The 'attach' command never deletes JSON files - you can re-run it safely.
+  Use 'cleanup' only when you're sure metadata was written correctly.
 
 Prerequisites:
   ExifTool must be installed and available in PATH.
@@ -58,7 +65,7 @@ Prerequisites:
     # Attach command
     attach_parser = subparsers.add_parser(
         "attach",
-        help="Attach metadata from JSON files to media files"
+        help="Attach metadata from JSON files to media files (JSON files are preserved)"
     )
     attach_parser.add_argument(
         "directory",
@@ -185,7 +192,8 @@ def cmd_attach(args: argparse.Namespace, reporter: Reporter) -> int:
                 success, message, verification = processor.process_file(
                     pair.media_path,
                     pair.json_path,
-                    verify=not args.no_verify
+                    verify=not args.no_verify,
+                    video_path=pair.video_path
                 )
                 
                 if success:
@@ -277,13 +285,37 @@ def cmd_cleanup(args: argparse.Namespace, reporter: Reporter) -> int:
                         progress.update(task, advance=1)
                         continue
                     
-                    # Verify metadata is in the file
+                    # Verify metadata is in the file(s)
                     from .metadata import verify_metadata
                     verification = verify_metadata(
                         pair.media_path,
                         metadata,
                         processor._et
                     )
+                    
+                    # If this is a Live Photo, also verify the video file
+                    if pair.video_path:
+                        video_verification = verify_metadata(
+                            pair.video_path,
+                            metadata,
+                            processor._et
+                        )
+                        # Both must succeed
+                        verification.success = verification.success and video_verification.success
+                        verification.date_match = verification.date_match and video_verification.date_match
+                        verification.gps_match = verification.gps_match and video_verification.gps_match
+                        verification.description_match = verification.description_match and video_verification.description_match
+                        
+                        if not verification.success:
+                            # Combine messages
+                            issues = []
+                            if not verification.date_match:
+                                issues.append("image or video date")
+                            if not verification.gps_match:
+                                issues.append("image or video GPS")
+                            if not verification.description_match:
+                                issues.append("image or video description")
+                            verification.message = f"Verification failed on: {', '.join(issues)}"
                     
                     if verification.success:
                         try:
